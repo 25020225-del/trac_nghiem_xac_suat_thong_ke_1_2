@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Ôn tập trắc nghiệm</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="typeset()"></script>
+<script>window.katexFail=function(){window._kf=1;if(window.onKatexFail)window.onKatexFail()}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" onerror="katexFail()">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" onerror="katexFail()"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="typeset()" onerror="katexFail()"></script>
 <style>
 :root{
   --bg:#eef2f5;--panel:#ffffff;--soft:#f5f8fa;--text:#1b2733;--muted:#66778a;
@@ -32,7 +33,7 @@ button{cursor:pointer}
 .muted{color:var(--muted)}
 
 /* Header */
-header{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+header{position:sticky;top:0;z-index:20;background:var(--bg);background:color-mix(in srgb,var(--bg) 88%,transparent);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--border);
   padding-top:env(safe-area-inset-top)}
 .bar{max-width:1120px;margin:auto;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -81,10 +82,18 @@ select{max-width:220px}
 .feedback{margin-top:18px;padding:14px 16px;border-radius:12px;background:var(--soft);border-left:4px solid var(--accent);white-space:pre-wrap;overflow-wrap:anywhere}
 .feedback.ok{border-left-color:var(--ok)}
 .feedback.bad{border-left-color:var(--bad)}
-.feedback strong{display:block;margin-bottom:4px}
+.feedback .res{display:block;margin-bottom:4px}
+main strong{font-weight:800;color:var(--accent);background:var(--accent-soft);padding:0 5px;border-radius:5px}
+main code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;background:var(--soft);border:1px solid var(--border);padding:0 5px;border-radius:5px}
 .actions{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:22px}
 .actions .grp{display:flex;gap:10px;flex-wrap:wrap}
 .hint{margin-top:12px;font-size:.85rem;color:var(--muted)}
+
+/* KaTeX, cảnh báo */
+.katex{font-size:1.05em;overflow-wrap:normal;word-break:normal}
+.katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0;margin:.8em 0}
+.notice span{white-space:pre-line}
+.warn{margin-top:12px;padding:8px 12px;border-radius:10px;background:var(--bad-soft);color:var(--bad);font-size:.9rem}
 
 /* Bảng trong câu hỏi */
 .tbl{overflow-x:auto;margin:10px 0;max-width:100%}
@@ -174,6 +183,7 @@ select{max-width:220px}
         <span class="topic" id="topic"></span>
         <div class="question" id="question"></div>
         <div class="answers" id="answers"></div>
+        <div class="warn hidden" id="warn">Câu này thiếu đáp án đúng hợp lệ trong data.csv (cột correct_answer), kết quả kiểm tra có thể sai.</div>
         <div class="feedback hidden" id="feedback"></div>
         <div class="actions">
           <button class="btn" id="prev">Câu trước</button>
@@ -229,8 +239,10 @@ function hashText(str){                       // cyrb53: đủ nhanh, không c�
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + ':' + str.length;
 }
-function parseCSV(t){
+function parseCSV(t, warns){
   t = t.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const first = t.split('\n', 1)[0];
+  const D = [',', ';', '\t'].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0]; // Excel VN hay lưu dấu ;
   const rows = []; let r = [], f = '', q = false;
   for (let i = 0; i < t.length; i++){
     const c = t[i];
@@ -239,41 +251,60 @@ function parseCSV(t){
       else if (c === '"') q = false;
       else f += c;
     } else if (c === '"') q = true;
-    else if (c === ',') { r.push(f); f = ''; }
+    else if (c === D) { r.push(f); f = ''; }
     else if (c === '\n') { r.push(f); rows.push(r); r = []; f = ''; }
     else f += c;
   }
   if (f || r.length){ r.push(f); rows.push(r); }
-  const h = rows.shift().map(x => x.trim());
+  if (q) warns.push('data.csv có dấu nháy kép (") không được đóng, các dòng phía sau có thể bị gộp vào một ô.');
+  const h = rows.shift().map(x => { const t = x.trim(); return REQ.find(r => r.toLowerCase() === t.toLowerCase()) || t; });
   const miss = REQ.filter(x => !h.includes(x));
   if (miss.length) throw Error('Thiếu cột: ' + miss.join(', '));
-  return rows.filter(x => x.some(v => v.trim()))
-             .map(x => Object.fromEntries(h.map((k,i) => [k, (x[i] || '').trim()])));
+  const body = rows.filter(x => x.some(v => v.trim()));
+  const badCols = []; body.forEach((x, i) => { if (x.length !== h.length) badCols.push(i + 2); });
+  if (badCols.length) warns.push('Số cột khác dòng tiêu đề ở ' + badCols.length + ' hàng (ví dụ hàng ' + badCols.slice(0, 5).join(', ') + ').');
+  return body.map(x => Object.fromEntries(h.map((k, i) => [k, (x[i] || '').trim()])));
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function shuffle(a){ for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } return a; }
-function fmt(s){                              // escape + chuyển bảng markdown thành <table>
-  const lines = esc(s).split('\n');
-  const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+function fmt(s){                              // escape, bảo vệ công thức, bảng markdown, **đậm**, `code`, <br>
+  let t = esc(s);
+  const maths = [];
+  const hold = m => { maths.push(m); return '\uE000' + (maths.length - 1) + '\uE001'; };
+  t = t.replace(/\$\$[\s\S]+?\$\$/g, hold)
+       .replace(/\\\[[\s\S]+?\\\]/g, hold)
+       .replace(/\\\([\s\S]+?\\\)/g, hold)
+       .replace(/\\\$/g, '\uE002')                      // \$ là ký hiệu đô la thường
+       .replace(/\$(?:\\.|[^$\\\n])+\$/g, hold)
+       .replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+  const inl = x => x.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  const PIPE = '\uE003';
+  const cells = l => l.trim().replace(/\\\|/g, PIPE).replace(/^\||\|$/g, '').split('|').map(c => c.trim().split(PIPE).join('|'));
   const isRow = l => /^\s*\|/.test(l);
-  const isSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const isSep = l => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(l);
+  const lines = t.split('\n');
   let out = '', i = 0;
   while (i < lines.length){
     if (isRow(lines[i]) && i + 1 < lines.length && isSep(lines[i+1])){
       const head = cells(lines[i]);
       const al = cells(lines[i+1]).map(c => c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left');
-      const td = (tag, c, k) => '<' + tag + ' style="text-align:' + (al[k] || 'left') + '">' + c + '</' + tag + '>';
-      let h = '<div class="tbl"><table><thead><tr>' + head.map((c,k) => td('th', c, k)).join('') + '</tr></thead><tbody>';
+      const td = (tag, c, k) => '<' + tag + ' style="text-align:' + (al[k] || 'left') + '">' + inl(c) + '</' + tag + '>';
+      let h = '<div class="tbl"><table><thead><tr>' + head.map((c, k) => td('th', c, k)).join('') + '</tr></thead><tbody>';
       i += 2;
       while (i < lines.length && isRow(lines[i])){
-        h += '<tr>' + cells(lines[i]).map((c,k) => td('td', c, k)).join('') + '</tr>'; i++;
+        h += '<tr>' + cells(lines[i]).map((c, k) => td('td', c, k)).join('') + '</tr>'; i++;
       }
       out += h + '</tbody></table></div>';
-    } else { out += lines[i] + (i < lines.length - 1 ? '\n' : ''); i++; }
+    } else { out += inl(lines[i]) + (i < lines.length - 1 ? '\n' : ''); i++; }
   }
-  return out;
+  return out
+    .replace(/\uE000(\d+)\uE001/g, (_, k) => maths[+k].replace(/\uE002/g, () => '\\$'))
+    .replace(/\uE002/g, () => '<span class="dollar">$</span>');
 }
-const norm = v => String(v).trim().toUpperCase().replace(/^ANSWER[_\s-]?/, '').charAt(0);
+const norm = v => {
+  const c = String(v).trim().toUpperCase().replace(/^(ANSWER|ĐÁP ÁN)[_\s:-]*/, '').charAt(0);
+  return c && '1234'.includes(c) ? LET[+c - 1] : c;
+};
 const rightOf = id => norm(data[id].correct_answer);
 const topicOf = x => x.topic || 'Không có chủ đề';
 
@@ -285,7 +316,15 @@ function validSaved(s){
   return s && s.hash === csvHash && Array.isArray(s.order) && s.answers && typeof s.answers === 'object'
     && s.order.every(i => Number.isInteger(i) && i >= 0 && i < data.length) && Number.isInteger(s.pos);
 }
-function showNotice(msg){ $('noticeText').textContent = msg; $('notice').classList.remove('hidden'); }
+function showNotice(msg){
+  const el = $('noticeText'), n = $('notice');
+  el.textContent = (!n.classList.contains('hidden') && el.textContent ? el.textContent + '\n' : '') + msg;
+  n.classList.remove('hidden');
+}
+window.onKatexFail = () => {
+  if (window._kn) return; window._kn = 1;
+  showNotice('Không tải được KaTeX (cần Internet), công thức sẽ hiện dạng văn bản.');
+};
 
 /* ---------- Trạng thái câu hỏi ---------- */
 function stateOf(id){
@@ -323,7 +362,12 @@ function renderPalette(){
   });
   grid.innerHTML = html;
   $('gridEmpty').classList.toggle('hidden', shown > 0);
-  const cur = grid.querySelector('.cur'); if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+  const cur = grid.querySelector('.cur'), pn = $('panel');   // chỉ cuộn trong bảng, không làm trang nhảy
+  if (cur && pn.scrollHeight > pn.clientHeight){
+    const pr = pn.getBoundingClientRect(), cr = cur.getBoundingClientRect();
+    if (cr.top < pr.top) pn.scrollTop -= pr.top - cr.top + 8;
+    else if (cr.bottom > pr.bottom) pn.scrollTop += cr.bottom - pr.bottom + 8;
+  }
 }
 function renderQuestion(){
   const total = S.order.length;
@@ -335,8 +379,8 @@ function renderQuestion(){
   const id = S.order[S.pos], x = data[id], a = S.answers[id] || {}, right = rightOf(id), done = !!a.checked;
   $('counter').textContent = 'Câu ' + (S.pos + 1) + ' / ' + total;
   $('topic').textContent = topicOf(x);
-  $('question').innerHTML = fmt(x.question);
-  $('answers').innerHTML = LET.map(l => {
+  $('question').innerHTML = fmt(x.question) || '<span class="muted">(Câu hỏi trống)</span>';
+  $('answers').innerHTML = LET.filter(l => x['answer_' + l]).map(l => {
     let cls = 'answer';
     if (done){ if (l === right) cls += ' correct'; else if (l === a.sel) cls += ' wrong'; }
     else if (a.sel === l) cls += ' selected';
@@ -344,11 +388,12 @@ function renderQuestion(){
       '</span><span class="txt">' + fmt(x['answer_' + l]) + '</span></button>';
   }).join('');
 
+  $('warn').classList.toggle('hidden', !!(LET.includes(right) && x['answer_' + right]));
   const fb = $('feedback');
   if (done){
     const ok = a.sel === right;
     fb.className = 'feedback ' + (ok ? 'ok' : 'bad');
-    fb.innerHTML = '<strong>' + (ok ? 'Chính xác' : 'Chưa đúng, đáp án đúng là ' + esc(right)) + '</strong>' +
+    fb.innerHTML = '<b class="res">' + (ok ? 'Chính xác' : 'Chưa đúng, đáp án đúng là ' + esc(right)) + '</b>' +
       (x.reason ? 'Giải thích: ' + fmt(x.reason) : '');
   } else fb.className = 'feedback hidden';
 
@@ -433,7 +478,7 @@ $('restart').onclick = restart;
 $('mode').onchange = () => { S.mode = $('mode').value; buildOrder(); save(); render(); };
 $('filter').onchange = () => { S.filter = $('filter').value; buildOrder(); save(); render(); };
 $('openList').onclick = openList; $('closeList').onclick = closeList; $('overlay').onclick = closeList;
-$('noticeClose').onclick = () => $('notice').classList.add('hidden');
+$('noticeClose').onclick = () => { $('notice').classList.add('hidden'); $('noticeText').textContent = ''; };
 document.addEventListener('keydown', e => {
   if (!S || !data.length || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.matches('select')) return;
@@ -462,8 +507,10 @@ $('theme').onclick = () => setTheme(document.documentElement.dataset.theme === '
 fetch('./data.csv', { cache: 'no-store' })
   .then(r => { if (!r.ok) throw Error('Không tìm thấy data.csv'); return r.text(); })
   .then(text => {
+    const warns = [];
+    if (text.includes('\uFFFD')) warns.push('data.csv có ký tự lỗi (�), hãy lưu file với mã hóa UTF-8.');
     csvHash = hashText(text);
-    data = parseCSV(text);
+    data = parseCSV(text, warns);
     if (!data.length) throw Error('data.csv không có câu hỏi nào');
 
     const saved = loadSaved();
@@ -482,6 +529,20 @@ fetch('./data.csv', { cache: 'no-store' })
 
     $('loading').classList.add('hidden'); $('quiz').classList.remove('hidden');
     render();
+
+    const list = (arr) => arr.slice(0, 5).map(n => n + 2).join(', ') + (arr.length > 5 ? '...' : '');
+    const noAns = [], noQ = [], few = [];
+    data.forEach((x, i) => {
+      const r = norm(x.correct_answer);
+      if (!LET.includes(r) || !x['answer_' + r]) noAns.push(i);
+      if (!x.question) noQ.push(i);
+      if (LET.filter(l => x['answer_' + l]).length < 2) few.push(i);
+    });
+    if (noAns.length) warns.push(noAns.length + ' câu thiếu đáp án đúng hợp lệ (hàng ' + list(noAns) + ').');
+    if (noQ.length) warns.push(noQ.length + ' câu có nội dung câu hỏi trống (hàng ' + list(noQ) + ').');
+    if (few.length) warns.push(few.length + ' câu có dưới 2 đáp án (hàng ' + list(few) + ').');
+    warns.forEach(showNotice);
+    if (window._kf) window.onKatexFail();
   })
   .catch(e => {
     $('sub').textContent = 'Lỗi';

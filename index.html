@@ -95,6 +95,16 @@ main code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;back
 .notice span{white-space:pre-line}
 .warn{margin-top:12px;padding:8px 12px;border-radius:10px;background:var(--bad-soft);color:var(--bad);font-size:.9rem}
 
+/* Nhập/xuất, hộp thoại */
+.io{margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}
+.io-btns{display:flex;gap:8px;flex-wrap:wrap}
+.io-btns .btn{flex:1;min-width:110px}
+.modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.5)}
+.modal .box{background:var(--panel);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);padding:22px;max-width:480px;width:100%;max-height:90vh;overflow:auto}
+.modal h3{margin:0 0 10px}
+.modal p{margin:0 0 8px}
+.modal .btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:18px}
+
 /* Bảng trong câu hỏi */
 .tbl{overflow-x:auto;margin:10px 0;max-width:100%}
 .tbl table{border-collapse:collapse;white-space:normal;font-weight:400;min-width:50%}
@@ -216,17 +226,28 @@ main code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;back
     </div>
     <div class="grid" id="grid"></div>
     <div class="empty hidden" id="gridEmpty">Không có câu nào trong nhóm này.</div>
+    <div class="io">
+      <h2>Tiến độ trả lời</h2>
+      <div class="io-btns">
+        <button class="btn" id="exportBtn">Xuất tiến độ</button>
+        <button class="btn" id="importBtn">Nhập tiến độ</button>
+      </div>
+      <input type="file" id="importFile" accept=".json,application/json" class="hidden">
+    </div>
   </aside>
 </div>
 <div class="overlay" id="overlay"></div>
+<div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+  <div class="box"><h3 id="mTitle"></h3><div id="mBody"></div><div class="btns" id="mBtns"></div></div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
-const KEY = 'quiz_state_v2', TKEY = 'quiz_theme';
+const KEY = 'quiz_state_v3', OLDKEY = 'quiz_state_v2', TKEY = 'quiz_theme';
 const REQ = ['question','topic','answer_A','answer_B','answer_C','answer_D','correct_answer','reason'];
 const LET = ['A','B','C','D'];
 
-let data = [], S = null, csvHash = '', palFilter = 'all';
+let data = [], Q = {}, S = null, csvHash = '', palFilter = 'all';   // Q: mã hash câu hỏi -> câu hỏi
 
 /* ---------- Tiện ích ---------- */
 function hashText(str){                       // cyrb53: đủ nhanh, không cần HTTPS
@@ -305,16 +326,52 @@ const norm = v => {
   const c = String(v).trim().toUpperCase().replace(/^(ANSWER|ĐÁP ÁN)[_\s:-]*/, '').charAt(0);
   return c && '1234'.includes(c) ? LET[+c - 1] : c;
 };
-const rightOf = id => norm(data[id].correct_answer);
+const rightOf = id => norm(Q[id].correct_answer);
 const topicOf = x => x.topic || 'Không có chủ đề';
 
 /* ---------- Lưu trữ ---------- */
-function loadSaved(){ try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
+function loadSaved(k){ try { return JSON.parse(localStorage.getItem(k || KEY)); } catch { return null; } }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
-function freshState(){ return { hash: csvHash, mode: 'random', filter: 'all', order: [], pos: 0, answers: {} }; }
-function validSaved(s){
-  return s && s.hash === csvHash && Array.isArray(s.order) && s.answers && typeof s.answers === 'object'
-    && s.order.every(i => Number.isInteger(i) && i >= 0 && i < data.length) && Number.isInteger(s.pos);
+/* Mỗi câu hỏi có mã hash riêng = hash(câu hỏi + chủ đề + 4 đáp án). Trạng thái trả lời lưu theo mã này. */
+function qKey(x){ return hashText([x.question, x.topic, x.answer_A, x.answer_B, x.answer_C, x.answer_D].join('\u0001')); }
+function assignKeys(){                          // câu giống hệt nhau được thêm hậu tố #2, #3...
+  const seen = {}; Q = {};
+  data.forEach(x => { const h = qKey(x); seen[h] = (seen[h] || 0) + 1; x._k = seen[h] > 1 ? h + '#' + seen[h] : h; Q[x._k] = x; });
+}
+function cleanAnswer(a){ return a && LET.includes(a.sel) ? { sel: a.sel, checked: !!a.checked } : null; }
+function freshState(){ return { v: 3, mode: 'random', filter: 'all', order: [], pos: 0, answers: {}, keys: [] }; }
+function migrateV2(){                           // chuyển tiến độ cũ (lưu theo số thứ tự) nếu data.csv chưa đổi
+  const o = loadSaved(OLDKEY);
+  if (!o || o.hash !== csvHash || !Array.isArray(o.order) || !o.answers) return null;
+  const n = freshState(), key = i => data[i] && data[i]._k;
+  Object.keys(o.answers).forEach(i => { const k = key(+i), a = cleanAnswer(o.answers[i]); if (k && a) n.answers[k] = a; });
+  n.order = o.order.map(key).filter(Boolean);
+  n.mode = o.mode === 'seq' ? 'seq' : 'random'; n.filter = o.filter || 'all'; n.pos = Number.isInteger(o.pos) ? o.pos : 0;
+  n.keys = data.map(x => x._k);
+  try { localStorage.removeItem(OLDKEY); } catch {}
+  return n;
+}
+function sync(){                                // đối chiếu tiến độ đã lưu với data.csv hiện tại theo mã hash
+  const all = data.map(x => x._k), allSet = new Set(all), prev = S.keys || [], prevSet = new Set(prev);
+  const first = !prev.length;
+  const added = first ? 0 : all.filter(k => !prevSet.has(k)).length;
+  const removed = first ? 0 : prev.filter(k => !allSet.has(k)).length;
+  let dropped = 0;
+  Object.keys(S.answers).forEach(k => {         // câu bị xóa/sửa thì xóa trạng thái; câu trùng hash thì giữ nguyên
+    const a = cleanAnswer(S.answers[k]);
+    if (!allSet.has(k) || !a){ delete S.answers[k]; dropped++; } else S.answers[k] = a;
+  });
+  const prevKey = S.order[S.pos];
+  const want = all.filter(k => S.filter === 'all' || topicOf(Q[k]) === S.filter), wantSet = new Set(want);
+  if (S.mode === 'seq') S.order = want;
+  else {
+    const kept = [...new Set(S.order)].filter(k => wantSet.has(k)), keptSet = new Set(kept);
+    S.order = kept.concat(shuffle(want.filter(k => !keptSet.has(k))));
+  }
+  const i = S.order.indexOf(prevKey);
+  S.pos = i >= 0 ? i : Math.max(0, Math.min(S.pos, S.order.length));
+  S.keys = all;
+  return { first, added, removed, dropped };
 }
 function showNotice(msg){
   const el = $('noticeText'), n = $('notice');
@@ -338,7 +395,7 @@ function counts(){
   return c;
 }
 function buildOrder(){
-  let ids = data.map((_, i) => i).filter(i => S.filter === 'all' || topicOf(data[i]) === S.filter);
+  let ids = data.filter(x => S.filter === 'all' || topicOf(x) === S.filter).map(x => x._k);
   if (S.mode === 'random') shuffle(ids);
   S.order = ids; S.pos = 0;
 }
@@ -358,7 +415,7 @@ function renderPalette(){
     if (palFilter !== 'all' && palFilter !== st) return;
     shown++;
     html += '<button class="cell ' + st + (i === S.pos ? ' cur' : '') + '" data-i="' + i + '" title="' +
-      esc(data[id].question.slice(0, 80)) + '" aria-label="Câu ' + (i+1) + '">' + (i+1) + '</button>';
+      esc(Q[id].question.slice(0, 80)) + '" aria-label="Câu ' + (i+1) + '">' + (i+1) + '</button>';
   });
   grid.innerHTML = html;
   $('gridEmpty').classList.toggle('hidden', shown > 0);
@@ -376,7 +433,7 @@ function renderQuestion(){
   if (S.pos >= total){ renderSummary(); return; }
 
   $('summary').classList.add('hidden'); $('qcard').classList.remove('hidden');
-  const id = S.order[S.pos], x = data[id], a = S.answers[id] || {}, right = rightOf(id), done = !!a.checked;
+  const id = S.order[S.pos], x = Q[id], a = S.answers[id] || {}, right = rightOf(id), done = !!a.checked;
   $('counter').textContent = 'Câu ' + (S.pos + 1) + ' / ' + total;
   $('topic').textContent = topicOf(x);
   $('question').innerHTML = fmt(x.question) || '<span class="muted">(Câu hỏi trống)</span>';
@@ -481,6 +538,7 @@ $('openList').onclick = openList; $('closeList').onclick = closeList; $('overlay
 $('noticeClose').onclick = () => { $('notice').classList.add('hidden'); $('noticeText').textContent = ''; };
 document.addEventListener('keydown', e => {
   if (!S || !data.length || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!$('modal').classList.contains('hidden')) return;
   if (e.target.matches('select')) return;
   const k = e.key.toUpperCase();
   if ('ABCD'.includes(k) && k.length === 1) select(k);
@@ -492,6 +550,68 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowLeft') go(S.pos - 1);
   else if (e.key === 'Escape') closeList();
 });
+
+/* ---------- Hộp thoại, xuất/nhập tiến độ ---------- */
+function ask(title, bodyHtml, buttons){
+  return new Promise(res => {
+    $('mTitle').textContent = title; $('mBody').innerHTML = bodyHtml;
+    const box = $('mBtns'); box.innerHTML = '';
+    const done = v => { $('modal').classList.add('hidden'); document.removeEventListener('keydown', onKey, true); res(v); };
+    const onKey = e => { if (e.key === 'Escape'){ e.stopPropagation(); done(null); } };
+    buttons.forEach(b => {
+      const el = document.createElement('button');
+      el.className = 'btn ' + (b.cls || ''); el.textContent = b.label; el.onclick = () => done(b.value);
+      box.appendChild(el);
+    });
+    document.addEventListener('keydown', onKey, true);
+    $('modal').classList.remove('hidden');
+    const pri = box.querySelector('.primary') || box.lastChild; if (pri) pri.focus();
+  });
+}
+function exportProgress(){
+  const answers = {};
+  Object.keys(S.answers).forEach(k => { const a = cleanAnswer(S.answers[k]); if (a && Q[k]) answers[k] = a; });
+  const n = Object.keys(answers).length;
+  const payload = { app: 'quiz-progress', version: 1, exportedAt: new Date().toISOString(), totalQuestions: data.length, answers };
+  const d = new Date(), p = x => String(x).padStart(2, '0');
+  const name = 'tien-do-on-tap-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.json';
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' }));
+  const a = document.createElement('a'); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  showNotice('Đã xuất ' + n + ' câu đã trả lời ra file ' + name + '.');
+}
+async function importProgress(file){
+  let obj;
+  try { obj = JSON.parse(await file.text()); } catch { return showNotice('File "' + file.name + '" không phải JSON hợp lệ.'); }
+  if (!obj || obj.app !== 'quiz-progress' || !obj.answers || typeof obj.answers !== 'object')
+    return showNotice('File "' + file.name + '" không phải file tiến độ do trang này xuất ra.');
+  const incoming = {}; let match = 0, skip = 0;
+  Object.keys(obj.answers).forEach(k => {
+    const a = cleanAnswer(obj.answers[k]);
+    if (a && Q[k]){ incoming[k] = a; match++; } else skip++;
+  });
+  if (!match) return showNotice('Không có câu nào trong file "' + file.name + '" khớp với data.csv hiện tại (' + skip + ' câu bị bỏ qua).');
+  const have = Object.keys(S.answers).length;
+  const info = '<p>File <b>' + esc(file.name) + '</b> có ' + (match + skip) + ' câu đã trả lời: <b>' + match +
+    '</b> câu khớp với data.csv hiện tại' + (skip ? ', ' + skip + ' câu không khớp sẽ bị bỏ qua' : '') + '.</p>';
+  let mode;
+  if (have){
+    mode = await ask('Nhập tiến độ', info +
+      '<p>Hiện đang có <b>' + have + '</b> câu đã trả lời. <b>Bạn có muốn xóa lịch sử trả lời hiện tại trước khi nhập không?</b></p>' +
+      '<p class="muted">Giữ và gộp: câu trùng lấy theo file, các câu khác giữ nguyên.</p>',
+      [{ label: 'Hủy', value: null }, { label: 'Giữ và gộp', value: 'merge' }, { label: 'Xóa rồi nhập', value: 'replace', cls: 'primary' }]);
+  } else {
+    mode = await ask('Nhập tiến độ', info, [{ label: 'Hủy', value: null }, { label: 'Nhập', value: 'replace', cls: 'primary' }]);
+  }
+  if (!mode) return;
+  if (mode === 'replace') S.answers = incoming; else Object.assign(S.answers, incoming);
+  save(); render(); closeList();
+  showNotice('Đã nhập ' + match + ' câu trả lời (' + (mode === 'replace' ? 'đã xóa lịch sử cũ' : 'gộp với lịch sử cũ') + ').');
+}
+$('exportBtn').onclick = exportProgress;
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importProgress(f); };
 
 /* ---------- Giao diện sáng/tối (không bị reset khi data.csv đổi) ---------- */
 function setTheme(t){
@@ -513,18 +633,16 @@ fetch('./data.csv', { cache: 'no-store' })
     data = parseCSV(text, warns);
     if (!data.length) throw Error('data.csv không có câu hỏi nào');
 
+    assignKeys();
     const saved = loadSaved();
-    if (validSaved(saved)) S = saved;
-    else {
-      if (saved && saved.hash !== csvHash) showNotice('data.csv đã thay đổi nên tiến độ cũ đã được xóa.');
-      S = freshState();
-    }
+    if (saved && saved.v === 3 && saved.answers && typeof saved.answers === 'object' && Array.isArray(saved.order)) S = Object.assign(freshState(), saved);
+    else S = migrateV2() || freshState();
     const topics = [...new Set(data.map(topicOf))];
     if (S.filter !== 'all' && !topics.includes(S.filter)) S.filter = 'all';
+    if (S.mode !== 'seq') S.mode = 'random';
+    const sy = sync();
     $('filter').innerHTML = '<option value="all">Tất cả</option>' + topics.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
     $('filter').value = S.filter; $('mode').value = S.mode;
-    if (!S.order.length) buildOrder();
-    S.pos = Math.max(0, Math.min(S.pos, S.order.length));
     save();
 
     $('loading').classList.add('hidden'); $('quiz').classList.remove('hidden');
@@ -541,6 +659,9 @@ fetch('./data.csv', { cache: 'no-store' })
     if (noAns.length) warns.push(noAns.length + ' câu thiếu đáp án đúng hợp lệ (hàng ' + list(noAns) + ').');
     if (noQ.length) warns.push(noQ.length + ' câu có nội dung câu hỏi trống (hàng ' + list(noQ) + ').');
     if (few.length) warns.push(few.length + ' câu có dưới 2 đáp án (hàng ' + list(few) + ').');
+    if (sy.added || sy.removed || sy.dropped)
+      showNotice('Đã đồng bộ với data.csv: thêm ' + sy.added + ' câu mới, bỏ ' + sy.removed + ' câu đã xóa/sửa (xóa ' + sy.dropped +
+        ' trạng thái trả lời tương ứng). Các câu giữ nguyên nội dung vẫn giữ trạng thái đã trả lời.');
     warns.forEach(showNotice);
     if (window._kf) window.onKatexFail();
   })

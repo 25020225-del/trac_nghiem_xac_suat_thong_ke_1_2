@@ -86,6 +86,12 @@ select{max-width:220px}
 .actions .grp{display:flex;gap:10px;flex-wrap:wrap}
 .hint{margin-top:12px;font-size:.85rem;color:var(--muted)}
 
+/* Bảng trong câu hỏi */
+.tbl{overflow-x:auto;margin:10px 0;max-width:100%}
+.tbl table{border-collapse:collapse;white-space:normal;font-weight:400;min-width:50%}
+.tbl th,.tbl td{border:1px solid var(--border);padding:7px 14px}
+.tbl th{background:var(--soft);font-weight:600}
+
 /* Summary */
 .summary h2{margin:0 0 6px}
 .sumgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}
@@ -246,6 +252,27 @@ function parseCSV(t){
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function shuffle(a){ for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } return a; }
+function fmt(s){                              // escape + chuyển bảng markdown thành <table>
+  const lines = esc(s).split('\n');
+  const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+  const isRow = l => /^\s*\|/.test(l);
+  const isSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  let out = '', i = 0;
+  while (i < lines.length){
+    if (isRow(lines[i]) && i + 1 < lines.length && isSep(lines[i+1])){
+      const head = cells(lines[i]);
+      const al = cells(lines[i+1]).map(c => c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left');
+      const td = (tag, c, k) => '<' + tag + ' style="text-align:' + (al[k] || 'left') + '">' + c + '</' + tag + '>';
+      let h = '<div class="tbl"><table><thead><tr>' + head.map((c,k) => td('th', c, k)).join('') + '</tr></thead><tbody>';
+      i += 2;
+      while (i < lines.length && isRow(lines[i])){
+        h += '<tr>' + cells(lines[i]).map((c,k) => td('td', c, k)).join('') + '</tr>'; i++;
+      }
+      out += h + '</tbody></table></div>';
+    } else { out += lines[i] + (i < lines.length - 1 ? '\n' : ''); i++; }
+  }
+  return out;
+}
 const norm = v => String(v).trim().toUpperCase().replace(/^ANSWER[_\s-]?/, '').charAt(0);
 const rightOf = id => norm(data[id].correct_answer);
 const topicOf = x => x.topic || 'Không có chủ đề';
@@ -308,13 +335,13 @@ function renderQuestion(){
   const id = S.order[S.pos], x = data[id], a = S.answers[id] || {}, right = rightOf(id), done = !!a.checked;
   $('counter').textContent = 'Câu ' + (S.pos + 1) + ' / ' + total;
   $('topic').textContent = topicOf(x);
-  $('question').textContent = x.question;
+  $('question').innerHTML = fmt(x.question);
   $('answers').innerHTML = LET.map(l => {
     let cls = 'answer';
     if (done){ if (l === right) cls += ' correct'; else if (l === a.sel) cls += ' wrong'; }
     else if (a.sel === l) cls += ' selected';
     return '<button class="' + cls + '" data-l="' + l + '"' + (done ? ' disabled' : '') + '><span class="letter">' + l +
-      '</span><span class="txt">' + esc(x['answer_' + l]) + '</span></button>';
+      '</span><span class="txt">' + fmt(x['answer_' + l]) + '</span></button>';
   }).join('');
 
   const fb = $('feedback');
@@ -322,7 +349,7 @@ function renderQuestion(){
     const ok = a.sel === right;
     fb.className = 'feedback ' + (ok ? 'ok' : 'bad');
     fb.innerHTML = '<strong>' + (ok ? 'Chính xác' : 'Chưa đúng, đáp án đúng là ' + esc(right)) + '</strong>' +
-      (x.reason ? 'Giải thích: ' + esc(x.reason) : '');
+      (x.reason ? 'Giải thích: ' + fmt(x.reason) : '');
   } else fb.className = 'feedback hidden';
 
   $('check').classList.toggle('hidden', done);
